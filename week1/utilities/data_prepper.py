@@ -243,7 +243,7 @@ class DataPrepper:
         feature_results["query_id"] = []
         feature_results["sku"] = []
         if response and response["hits"]["hits"]:
-            for doc_id in query_doc_ids:
+            for idx, doc_id in enumerate(query_doc_ids):
                 feature_results["doc_id"].append(doc_id)
                 feature_results["sku"].append(doc_id)  # doc_id and sku the same
                 feature_results["query_id"].append(query_id)
