@@ -234,25 +234,32 @@ class DataPrepper:
         log_query = lu.create_feature_log_query(key, query_doc_ids, click_prior_query, self.featureset_name,
                                                 self.ltr_store_name,
                                                 size=len(query_doc_ids), terms_field=terms_field)
+        response = self.opensearch.search(body=log_query, index=self.index_name)
         ##### Step Extract LTR Logged Features:
-        # IMPLEMENT_START --
-        print("IMPLEMENT ME: __log_ltr_query_features: Extract log features out of the LTR:EXT response and place in a data frame")
         # Loop over the hits structure returned by running `log_query` and then extract out the features from the response per query_id and doc id.  Also capture and return all query/doc pairs that didn't return features
         # Your structure should look like the data frame below
         feature_results = {}
-        feature_results["doc_id"] = []  # capture the doc id so we can join later
-        feature_results["query_id"] = []  # ^^^
+        feature_results["doc_id"] = []
+        feature_results["query_id"] = []
         feature_results["sku"] = []
-        feature_results["name_match"] = []
-        rng = np.random.default_rng(12345)
-        for doc_id in query_doc_ids:
-            feature_results["doc_id"].append(doc_id)  # capture the doc id so we can join later
-            feature_results["query_id"].append(query_id)
-            feature_results["sku"].append(doc_id)  
-            feature_results["name_match"].append(rng.random())
+        if response and response["hits"]["hits"]:
+            for doc_id in query_doc_ids:
+                feature_results["doc_id"].append(doc_id)
+                feature_results["sku"].append(doc_id)  # doc_id and sku the same
+                feature_results["query_id"].append(query_id)
+                # Add all the features from the ltr feature log to the feature results dict
+                ltr_feature_log_entries = response["hits"]["hits"][idx]["fields"]["_ltrlog"][0]["log_entry"]
+                for entry in ltr_feature_log_entries:
+                    entry_name = entry["name"]
+                    # If missing the "value" key then set value to 0
+                    entry_value = entry.get("value", 0)
+                    # Need to add key to feature_results for the first doc
+                    if entry_name in feature_results:
+                        feature_results[entry_name].append(entry_value)
+                    else:
+                        feature_results[entry_name] = [entry_value]
         frame = pd.DataFrame(feature_results)
         return frame.astype({'doc_id': 'int64', 'query_id': 'int64', 'sku': 'int64'})
-        # IMPLEMENT_END
 
     # Can try out normalizing data, but for XGb, you really don't have to since it is just finding splits
     def normalize_data(self, ranks_features_df, feature_set, normalize_type_map):
