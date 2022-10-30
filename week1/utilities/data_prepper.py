@@ -242,22 +242,17 @@ class DataPrepper:
         feature_results["doc_id"] = []
         feature_results["query_id"] = []
         feature_results["sku"] = []
-        if response and response["hits"]["hits"]:
-            for idx, doc_id in enumerate(query_doc_ids):
-                feature_results["doc_id"].append(doc_id)
-                feature_results["sku"].append(doc_id)  # doc_id and sku the same
+        if response and len(response["hits"]) > 0:
+            hits = response["hits"]["hits"]
+            for hit in hits:
+                feature_results["doc_id"].append(hit["_id"])
                 feature_results["query_id"].append(query_id)
-                # Add all the features from the ltr feature log to the feature results dict
-                ltr_feature_log_entries = response["hits"]["hits"][idx]["fields"]["_ltrlog"][0]["log_entry"]
-                for entry in ltr_feature_log_entries:
-                    entry_name = entry["name"]
-                    # If missing the "value" key then set value to 0
-                    entry_value = entry.get("value", 0)
-                    # Need to add key to feature_results for the first doc
-                    if entry_name in feature_results:
-                        feature_results[entry_name].append(entry_value)
-                    else:
-                        feature_results[entry_name] = [entry_value]
+                feature_results["sku"].append(hit["_id"])
+                feature_log = hit["fields"]["_ltrlog"][0]["log_entry"]
+                for feature in feature_log:
+                    if feature["name"] not in feature_results:
+                        feature_results[feature["name"]] = list()
+                    feature_results[feature["name"]].append(feature.get("value", 0))
         frame = pd.DataFrame(feature_results)
         return frame.astype({'doc_id': 'int64', 'query_id': 'int64', 'sku': 'int64'})
 
