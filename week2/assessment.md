@@ -1,4 +1,4 @@
-### Project Assessment
+# Project Assessment
 ## For classifying product names to categories:
 * What precision (P@1) were you able to achieve?
     ```
