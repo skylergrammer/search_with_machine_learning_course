@@ -16,7 +16,7 @@ output_file_name = r'/workspace/datasets/fasttext/labeled_queries.txt'
 
 parser = argparse.ArgumentParser(description='Process arguments.')
 general = parser.add_argument_group("general")
-general.add_argument("--min_queries", default=1,  help="The minimum number of queries per category label (default is 1)")
+general.add_argument("--min_queries", default=1, type=int, help="The minimum number of queries per category label (default is 1)")
 general.add_argument("--output", default=output_file_name, help="the file to output to")
 
 args = parser.parse_args()
@@ -47,11 +47,33 @@ parents_df = pd.DataFrame(list(zip(categories, parents)), columns =['category', 
 # Read the training data into pandas, only keeping queries with non-root categories in our category tree.
 queries_df = pd.read_csv(queries_file_name)[['category', 'query']]
 queries_df = queries_df[queries_df['category'].isin(categories)]
-
-# IMPLEMENT ME: Convert queries to lowercase, and optionally implement other normalization, like stemming.
+queries_df["query"] = queries_df["query"]\
+    .str.replace("[^a-zA-Z0-9]", " ")\
+    .str.replace("\s+", " ")\
+    .str.strip()\
+    .str.lower().map(lambda x: ' '.join([stemmer.stem(y) for y in x.split()]))
 
 # IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
-
+categories_with_parents = set(parents_df["category"])
+query_counts_per_category = queries_df.groupby(["category"]).size().reset_index(name='count')
+labels_with_counts_below_threshold = query_counts_per_category[query_counts_per_category["count"] < args.min_queries].sort_values("count")
+iterations = 0
+while labels_with_counts_below_threshold.size > 0:
+    unique_labels_0 = len(set(queries_df["category"]))
+    for _, row in labels_with_counts_below_threshold.iterrows():
+        label = row["category"]
+        label_counts = row["count"]
+        if label in categories_with_parents:
+            parent_of_label = parents_df[parents_df["category"] == label]["parent"].iloc[0]
+            queries_df.loc[queries_df["category"] == label, "category"] = parent_of_label
+        else:
+            print(f"{label} already at highest level")
+    iterations += 1
+    query_counts_per_category = queries_df.groupby(["category"]).size().reset_index(name='count')
+    new_label_counts = query_counts_per_category[query_counts_per_category["category"] == parent_of_label]["count"].iloc[0]
+    labels_with_counts_below_threshold = query_counts_per_category[query_counts_per_category["count"] < args.min_queries].sort_values("count")
+    unique_labels_1 = len(set(queries_df["category"]))
+    print(f"Category rollup reduced unique labels from {unique_labels_0} to {unique_labels_1} in {iterations} iterations.")
 # Create labels in fastText format.
 queries_df['label'] = '__label__' + queries_df['category']
 

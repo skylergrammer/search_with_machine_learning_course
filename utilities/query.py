@@ -11,11 +11,50 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
-
+import re
+import fasttext
+from nltk import PorterStemmer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
+
+
+class QueryPreprocessor:
+    stemmer = PorterStemmer()
+
+    def __call__(self, query):
+        query_norm = re.sub("\s+", " ", re.sub("[^a-zA-Z0-9]", " ", query.lower())).strip()
+        return " ".join([self.stemmer.stem(x) for x in query_norm.split()])
+
+
+class QueryClassifier:
+    def __init__(self, model_fn, prob_score_cutoff=0.5, topn=10, label_prefix="__label__"):
+        self.model_fn = model_fn
+        self.prob_score_cutoff = prob_score_cutoff
+        self.topn = topn
+        self.label_prefix = label_prefix
+        self.model = fasttext.load_model(model_fn)
+        self.preprocessor = QueryPreprocessor()
+
+    def classify(self, query):
+        query_norm = self.preprocessor(query)
+        return self.model.predict(query_norm, self.topn)
+
+    def predict_top_labels(self, query, verbose=False):
+        labels, prob_scores = self.classify(query)
+        labels = [x.removeprefix(self.label_prefix) for x in labels]
+        if verbose:
+            output = "\n".join([f"{x[0]:<16}\t{x[1]:.3f}" for x in zip(labels, prob_scores)])
+            print(output)
+        idx = 0
+        top_labels = []
+        accumulated_probability = 0
+        while accumulated_probability < self.prob_score_cutoff and idx < self.topn:
+            top_labels.append(labels[idx])
+            accumulated_probability += prob_scores[idx]
+            idx += 1
+        return top_labels
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -190,14 +229,24 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
     return query_obj
 
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", synonyms=False, size=10):
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", synonyms=False, size=10, query_classifier=None):
     #### W3: classify the query
+    categories = query_classifier.predict_top_labels(args.query, verbose=True)
+    print(categories)
     #### W3: create filters and boosts
+    if categories:
+        filters = {
+                "terms": {
+                    "categoryPathIds": categories
+                }
+            }
+    else:
+        filters = None
     # Note: you may also want to modify the `create_query` method above
     query_obj = create_query(
         user_query,
         click_prior_query=None,
-        filters=None, sort=sort,
+        filters=filters, sort=sort,
         sortDir=sortDir,
         size=size,
         source=["name", "shortDescription"],
@@ -225,6 +274,8 @@ if __name__ == "__main__":
                          help='The OpenSearch port')
     general.add_argument("--synonyms", action="store_true")
     general.add_argument("--size", "-n", type=int, default=10)
+    general.add_argument("--classifier_fn", "-c", default="/workspace/search_with_machine_learning_course/week3/query_classifier.bin")
+    general.add_argument("--prob_score_cutoff", type=float, default=0.5)
     general.add_argument('--user',
                          help='The OpenSearch admin.  If this is set, the program will prompt for password too. If not set, use default of admin/admin')
 
@@ -253,5 +304,11 @@ if __name__ == "__main__":
         ssl_show_warn=False,
 
     )
-
-    search(client=opensearch, user_query=args.query, index=args.index, synonyms=args.synonyms, size=args.size)
+    search(
+        client=opensearch,
+        user_query=args.query,
+        index=args.index,
+        synonyms=args.synonyms,
+        size=args.size,
+        query_classifier=QueryClassifier(args.classifier_fn, prob_score_cutoff=args.prob_score_cutoff)
+    )
