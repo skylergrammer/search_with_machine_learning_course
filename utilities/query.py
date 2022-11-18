@@ -14,11 +14,31 @@ import logging
 import re
 import fasttext
 from nltk import PorterStemmer
+from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
 
+
+class QueryEmbeddingForSearch:
+    def __init__(self, transformer_model):
+        self.model = transformer_model
+
+    def create_vector_query(self, query, k=10):
+        embedding = self.model.encode([query])[0]
+        query_object = {
+            "size": k,
+            "query": {
+                "knn": {
+                    "embedding": {
+                        "vector": embedding,
+                        "k": k
+                    }
+                }
+            }
+        }
+        return query_object
 
 class QueryPreprocessor:
     stemmer = PorterStemmer()
@@ -229,34 +249,42 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
     return query_obj
 
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", synonyms=False, size=10, query_classifier=None):
-    #### W3: classify the query
-    categories = query_classifier.predict_top_labels(args.query, verbose=True)
-    print(categories)
-    #### W3: create filters and boosts
-    if categories:
-        filters = {
-                "terms": {
-                    "categoryPathIds": categories
-                }
-            }
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", synonyms=False, size=10, query_classifier=None, vector_search=False):
+    if vector_search:
+        transformer = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        query_embedder = QueryEmbeddingForSearch(transformer)
+        query_obj = query_embedder.create_vector_query(user_query, k=size)
     else:
-        filters = None
-    # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(
-        user_query,
-        click_prior_query=None,
-        filters=filters, sort=sort,
-        sortDir=sortDir,
-        size=size,
-        source=["name", "shortDescription"],
-        synonyms=synonyms
-    )
+        if query_classifier is not None:
+            categories = query_classifier.predict_top_labels(user_query, verbose=True)
+            print(categories)
+        else:
+            categories = []
+        if categories:
+            filters = {
+                    "terms": {
+                        "categoryPathIds": categories
+                    }
+                }
+        else:
+            filters = None
+        query_obj = create_query(
+            user_query,
+            click_prior_query=None,
+            filters=filters,
+            sort=sort,
+            sortDir=sortDir,
+            size=size,
+            source=["name", "shortDescription"],
+            synonyms=synonyms
+        )
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
         hits = response['hits']['hits']
-        print(json.dumps(response, indent=2))
+        for hit in hits:
+            source = hit['_source']
+            print(f"{source['name'][0]} -- {'-->'.join(source['categoryPath'])}")
 
 
 if __name__ == "__main__":
@@ -274,11 +302,11 @@ if __name__ == "__main__":
                          help='The OpenSearch port')
     general.add_argument("--synonyms", action="store_true")
     general.add_argument("--size", "-n", type=int, default=10)
-    general.add_argument("--classifier_fn", "-c", default="/workspace/search_with_machine_learning_course/week3/query_classifier.bin")
+    general.add_argument("--query_classifier", action="store_true")
     general.add_argument("--prob_score_cutoff", type=float, default=0.5)
     general.add_argument('--user',
                          help='The OpenSearch admin.  If this is set, the program will prompt for password too. If not set, use default of admin/admin')
-
+    parser.add_argument("--vector_search", "-v", action="store_true")
     args = parser.parse_args()
 
     if len(vars(args)) == 0:
@@ -304,11 +332,16 @@ if __name__ == "__main__":
         ssl_show_warn=False,
 
     )
+    if args.query_classifier:
+        query_classifier = QueryClassifier("/workspace/search_with_machine_learning_course/week3/query_classifier.bin", prob_score_cutoff=args.prob_score_cutoff)
+    else:
+        query_classifier = None
     search(
         client=opensearch,
         user_query=args.query,
         index=args.index,
         synonyms=args.synonyms,
         size=args.size,
-        query_classifier=QueryClassifier(args.classifier_fn, prob_score_cutoff=args.prob_score_cutoff)
+        query_classifier=query_classifier,
+        vector_search=args.vector_search
     )
