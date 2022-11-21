@@ -150,6 +150,11 @@ def index_file(file, index_name, reduced=False):
             docs = []
             names = []
     if len(docs) > 0:
+        # bulk encode names
+        name_embeddings = transformer.encode(names)
+        # add embedding to document object
+        for idx, embedding in enumerate(name_embeddings):
+            docs[idx]["_source"]["embedding"] = embedding
         bulk(client, docs, request_timeout=60)
         logger.info(f'{docs_indexed} documents indexed')
     return docs_indexed
